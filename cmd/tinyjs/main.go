@@ -1,53 +1,57 @@
 package main
 
 import (
+	"flag"
 	"fmt"
-	"io"
+	"log"
 	"os"
 
 	"example.com/tinyjs/internal/compiler"
 	"example.com/tinyjs/internal/parser"
+	"example.com/tinyjs/internal/runner"
 )
 
 func main() {
-	src, err := readSource()
-	if err != nil {
-		exitf("read source: %v", err)
+	showSource := flag.Bool("s", false, "Show LLVM IR instead of running")
+	outputFile := flag.String("o", "", "Specify output file")
+
+	flag.Parse()
+
+	if flag.NArg() < 1 {
+		fmt.Fprintln(os.Stderr, "Usage: tinyjs [-s] <file.tjs>")
+		os.Exit(1)
 	}
 
-	prog, err := parser.Parse(src)
+	arg := flag.Arg(0)
+
+	content, err := os.ReadFile(arg)
 	if err != nil {
-		exitf("parse error: %v", err)
+		fmt.Fprintf(os.Stderr, "error reading file: %v\n", err)
+		os.Exit(1)
 	}
 
-	out, err := compiler.Compile(prog)
+	parser, err := parser.New()
+	program, err := parser.ParseString("demo.tjs", string(content))
 	if err != nil {
-		exitf("compile error: %v", err)
+		log.Fatal(err)
+	}
+	compiler := compiler.MustNew()
+	irText, err := compiler.GenerateIR(program)
+	if err != nil {
+		log.Fatal(err)
 	}
 
-	fmt.Print(out)
-}
-
-func readSource() (string, error) {
-	switch len(os.Args) {
-	case 1:
-		b, err := io.ReadAll(os.Stdin)
-		if err != nil {
-			return "", err
+	if *showSource {
+		fmt.Println(irText)
+	} else if *outputFile != "" {
+		if err := compiler.Build(irText, *outputFile); err != nil {
+			log.Fatal(err)
 		}
-		return string(b), nil
-	case 2:
-		b, err := os.ReadFile(os.Args[1])
+	} else {
+		out, err := runner.RunIR(irText)
 		if err != nil {
-			return "", err
+			log.Fatal(err)
 		}
-		return string(b), nil
-	default:
-		return "", fmt.Errorf("usage: tinyjs [file]")
+		fmt.Print(out)
 	}
-}
-
-func exitf(format string, args ...any) {
-	fmt.Fprintf(os.Stderr, format+"\n", args...)
-	os.Exit(1)
 }

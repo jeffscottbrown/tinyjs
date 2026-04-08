@@ -1,18 +1,43 @@
 package ast
 
-// Program is the root node for the tiny language.
+import "github.com/alecthomas/participle/v2/lexer"
+
 type Program struct {
-	Assignments []*Assignment `@@*`
+	Statements []*Statement `@@*`
 }
 
-// Assignment represents the only supported statement shape:
-//
-// 	name = 123;
-//
-// This is intentionally tiny so the project can grow live.
+type Statement struct {
+	Pos        lexer.Position
+	Assignment *Assignment `  @@`
+	Print      *Print      `| @@`
+}
+
 type Assignment struct {
-	Name  string `@Ident`
-	Eq    string `"="`
-	Value int64  `@Int`
-	Semi  string `";"`
+	Pos   lexer.Position
+	Name  string      `@Ident`
+	Value *Expression `"=" @@ ";"`
+}
+
+type Print struct {
+	Pos lexer.Position
+	Arg *Expression `"print" "(" @@ ")" ";"`
+}
+
+type Expression struct {
+	Pos    lexer.Position
+	Binary *BinaryExpr `  @@`
+	Value  *ValueExpr  `| @@`
+}
+
+type BinaryExpr struct {
+	Pos   lexer.Position
+	Left  *ValueExpr `@@`
+	Op    string     `@("+" | "-" | "*" | "/")`
+	Right *ValueExpr `@@`
+}
+
+type ValueExpr struct {
+	Pos   lexer.Position
+	Int   *int64  `  @Int`
+	Ident *string `| @Ident`
 }

@@ -9,23 +9,42 @@ import (
 )
 
 var tinyLexer = lexer.MustSimple([]lexer.SimpleRule{
-	{Name: "Comment", Pattern: `//[^\n\r]*`},
-	{Name: "Whitespace", Pattern: `[ \t\r\n]+`},
+	{Name: "Keyword", Pattern: `\bprint\b`},
 	{Name: "Ident", Pattern: `[a-zA-Z_][a-zA-Z0-9_]*`},
-	{Name: "Int", Pattern: `\d+`},
-	{Name: "Punct", Pattern: `[=;]`},
+	{Name: "Int", Pattern: `[0-9]+`},
+	{Name: "Operator", Pattern: `[+\-*/]`},
+	{Name: "Punct", Pattern: `[=();]`},
+	{Name: "Whitespace", Pattern: `\s+`},
 })
 
-var tinyParser = participle.MustBuild[ast.Program](
-	participle.Lexer(tinyLexer),
-	participle.Elide("Whitespace", "Comment"),
-)
+type Parser struct {
+	parser *participle.Parser[ast.Program]
+}
 
-// Parse parses the full source into an AST.
-func Parse(src string) (*ast.Program, error) {
-	prog, err := tinyParser.ParseString("", src)
+func New() (*Parser, error) {
+	p, err := participle.Build[ast.Program](
+		participle.Lexer(tinyLexer),
+		participle.Elide("Whitespace"),
+	)
 	if err != nil {
-		return nil, fmt.Errorf("parse source: %w", err)
+		return nil, fmt.Errorf("build parser: %w", err)
 	}
-	return prog, nil
+
+	return &Parser{parser: p}, nil
+}
+
+func MustNew() *Parser {
+	p, err := New()
+	if err != nil {
+		panic(err)
+	}
+	return p
+}
+
+func (p *Parser) ParseString(filename, input string) (*ast.Program, error) {
+	program, err := p.parser.ParseString(filename, input)
+	if err != nil {
+		return nil, fmt.Errorf("parse %s: %w", filename, err)
+	}
+	return program, nil
 }

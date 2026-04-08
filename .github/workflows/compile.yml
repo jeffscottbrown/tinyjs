@@ -1,0 +1,130 @@
+name: Compile TinyJS
+
+on:
+  workflow_call:
+    inputs:
+      glob:
+        description: >
+          Glob pattern for .tjs source files relative to the repository root.
+          Example: "src/**/*.tjs"
+        required: true
+        type: string
+      platforms:
+        description: >
+          JSON array of GitHub-hosted runner labels to build for.
+          Example: '["ubuntu-latest","macos-latest"]'
+        required: false
+        default: '["ubuntu-latest","macos-latest"]'
+        type: string
+      emit_ir:
+        description: >
+          When true, also upload LLVM IR (.ll) files as a workflow artifact.
+          IR is platform-independent; it is generated and uploaded once from
+          the first platform in the platforms list.
+        required: false
+        default: false
+        type: boolean
+
+jobs:
+  compile:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: ${{ fromJson(inputs.platforms) }}
+
+    runs-on: ${{ matrix.os }}
+
+    steps:
+      # ── 1. Consumer's source code ────────────────────────────────────────
+      - name: Checkout consumer repository
+        uses: actions/checkout@v4
+
+      # ── 2. Resolve the tinyjs repo and ref from the called workflow ref ──
+      #
+      # github.workflow_ref has the form:
+      #   owner/repo/.github/workflows/compile.yml@refs/heads/main
+      # We extract the repo ("owner/repo") and the ref ("refs/heads/main")
+      # so we check out the exact same version of the compiler that the
+      # caller pinned with their `uses:` directive.
+      - name: Resolve compiler source location
+        id: compiler
+        shell: bash
+        run: |
+          wf_ref="${{ github.workflow_ref }}"
+          repo="${wf_ref%%/.github/*}"
+          ref="${wf_ref##*@}"
+          echo "repo=$repo" >> "$GITHUB_OUTPUT"
+          echo "ref=$ref"  >> "$GITHUB_OUTPUT"
+
+      # ── 3. Compiler source ───────────────────────────────────────────────
+      - name: Checkout tinyjs compiler source
+        uses: actions/checkout@v4
+        with:
+          repository: ${{ steps.compiler.outputs.repo }}
+          ref:        ${{ steps.compiler.outputs.ref }}
+          path:       _tinyjs_src
+
+      # ── 4. Go toolchain ──────────────────────────────────────────────────
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version-file:      _tinyjs_src/go.mod
+          cache-dependency-path: _tinyjs_src/go.sum
+
+      # ── 5. Build the compiler binary from source ─────────────────────────
+      - name: Build tinyjs
+        shell: bash
+        run: |
+          cd _tinyjs_src
+          go build -o "$GITHUB_WORKSPACE/_tinyjs_bin/tinyjs" ./cmd/tinyjs
+
+      # ── 6. Compile every matching .tjs file ──────────────────────────────
+      #
+      # python3 is pre-installed on all GitHub-hosted runners and handles
+      # recursive glob patterns (**) portably across Linux and macOS.
+      - name: Compile .tjs files
+        shell: bash
+        run: |
+          set -euo pipefail
+          TINYJS="$GITHUB_WORKSPACE/_tinyjs_bin/tinyjs"
+          BIN_OUT="$GITHUB_WORKSPACE/_out/bin"
+          IR_OUT="$GITHUB_WORKSPACE/_out/ir"
+          mkdir -p "$BIN_OUT" "$IR_OUT"
+
+          mapfile -t sources < <(python3 - "${{ inputs.glob }}" <<'PYEOF'
+          import glob, sys
+          matches = sorted(glob.glob(sys.argv[1], recursive=True))
+          if not matches:
+              raise SystemExit(f"No files matched glob pattern: {sys.argv[1]!r}")
+          for f in matches:
+              print(f)
+          PYEOF
+          )
+
+          for src in "${sources[@]}"; do
+            name=$(basename "${src%.tjs}")
+            echo ":: compiling $src  ->  bin/$name"
+            "$TINYJS" -o "$BIN_OUT/$name" "$src"
+
+            if [ "${{ inputs.emit_ir }}" = "true" ]; then
+              echo ":: generating IR $src  ->  ir/$name.ll"
+              "$TINYJS" -s "$src" > "$IR_OUT/$name.ll"
+            fi
+          done
+
+      # ── 7. Upload native binaries ─────────────────────────────────────────
+      - name: Upload binaries
+        uses: actions/upload-artifact@v4
+        with:
+          name: tinyjs-bin-${{ matrix.os }}
+          path: _out/bin/
+          if-no-files-found: error
+
+      # ── 8. Upload IR (once, from the first platform in the list) ─────────
+      - name: Upload IR files
+        if: inputs.emit_ir && matrix.os == fromJson(inputs.platforms)[0]
+        uses: actions/upload-artifact@v4
+        with:
+          name: tinyjs-ir
+          path: _out/ir/
+          if-no-files-found: error

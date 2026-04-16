@@ -16,6 +16,13 @@ on:
         required: false
         default: '["ubuntu-latest","macos-latest"]'
         type: string
+      compiler_ref:
+        description: >
+          Branch, tag, or SHA of the jeffscottbrown/tinyjs compiler to use.
+          Defaults to 'main'.
+        required: false
+        default: 'main'
+        type: string
       emit_ir:
         description: >
           When true, also upload LLVM IR (.ll) files as a workflow artifact.
@@ -39,47 +46,27 @@ jobs:
       - name: Checkout consumer repository
         uses: actions/checkout@v4
 
-      # ── 2. Resolve the tinyjs repo and ref from the called workflow ref ──
+      # ── 2. Compiler source ───────────────────────────────────────────────
       #
-      # github.workflow_ref has the form:
-      #   owner/repo/.github/workflows/compile.yml@refs/heads/main
-      # We extract the repo ("owner/repo") and the ref ("refs/heads/main")
-      # so we check out the exact same version of the compiler that the
-      # caller pinned with their `uses:` directive.
-      - name: Resolve compiler source location
-        id: compiler
-        shell: bash
-        run: |
-          set -euo pipefail
-          wf_ref="${{ github.workflow_ref }}"
-          echo "workflow_ref=${wf_ref}"
-          repo="${wf_ref%%/.github/*}"
-          ref="${wf_ref##*@}"
-          if [[ -z "$repo" || -z "$ref" ]]; then
-            echo "::error::Failed to extract repo/ref from workflow_ref='${wf_ref}'"
-            exit 1
-          fi
-          echo "repo=${repo}"
-          echo "ref=${ref}"
-          echo "repo=$repo" >> "$GITHUB_OUTPUT"
-          echo "ref=$ref"  >> "$GITHUB_OUTPUT"
-
-      # ── 3. Compiler source ───────────────────────────────────────────────
+      # NOTE: In a workflow_call reusable workflow the entire `github`
+      # context is scoped to the *caller*, so github.workflow_ref resolves
+      # to the caller's repo – not this one.  We therefore hardcode the
+      # compiler repository and accept the desired ref as an explicit input.
       - name: Checkout tinyjs compiler source
         uses: actions/checkout@v4
         with:
-          repository: ${{ steps.compiler.outputs.repo }}
-          ref:        ${{ steps.compiler.outputs.ref }}
+          repository: jeffscottbrown/tinyjs
+          ref:        ${{ inputs.compiler_ref }}
           path:       _tinyjs_src
 
-      # ── 4. Go toolchain ──────────────────────────────────────────────────
+      # ── 3. Go toolchain ──────────────────────────────────────────────────
       - name: Set up Go
         uses: actions/setup-go@v5
         with:
           go-version-file:      _tinyjs_src/go.mod
           cache-dependency-path: _tinyjs_src/go.sum
 
-      # ── 5. Build the compiler binary from source ─────────────────────────
+      # ── 4. Build the compiler binary from source ─────────────────────────
       - name: Build tinyjs
         shell: bash
         run: |
@@ -87,7 +74,7 @@ jobs:
           cd _tinyjs_src
           go build -o "$GITHUB_WORKSPACE/_tinyjs_bin/tinyjs" ./cmd/tinyjs
 
-      # ── 6. Compile every matching .tjs file ──────────────────────────────
+      # ── 5. Compile every matching .tjs file ──────────────────────────────
       #
       # python3 is pre-installed on all GitHub-hosted runners and handles
       # recursive glob patterns (**) portably across Linux and macOS.
@@ -121,7 +108,7 @@ jobs:
             fi
           done
 
-      # ── 7. Upload native binaries ─────────────────────────────────────────
+      # ── 6. Upload native binaries ─────────────────────────────────────────
       - name: Upload binaries
         uses: actions/upload-artifact@v4
         with:
@@ -129,7 +116,7 @@ jobs:
           path: _out/bin/
           if-no-files-found: error
 
-      # ── 8. Upload IR (once, from the first platform in the list) ─────────
+      # ── 7. Upload IR (once, from the first platform in the list) ─────────
       - name: Upload IR files
         if: inputs.emit_ir && matrix.os == fromJson(inputs.platforms)[0]
         uses: actions/upload-artifact@v4

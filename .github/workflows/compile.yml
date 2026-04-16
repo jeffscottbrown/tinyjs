@@ -87,17 +87,19 @@ jobs:
           IR_OUT="$GITHUB_WORKSPACE/_out/ir"
           mkdir -p "$BIN_OUT" "$IR_OUT"
 
-          mapfile -t sources < <(python3 - "${{ inputs.glob }}" <<'PYEOF'
-          import glob, sys
-          matches = sorted(glob.glob(sys.argv[1], recursive=True))
-          if not matches:
-              raise SystemExit(f"No files matched glob pattern: {sys.argv[1]!r}")
-          for f in matches:
-              print(f)
-          PYEOF
-          )
+          # mapfile requires bash 4+; macOS ships bash 3.2, so use a
+          # here-string + while-read loop instead.
+          sources=$(python3 -c "
+import glob, sys
+pattern = sys.argv[1]
+matches = sorted(glob.glob(pattern, recursive=True))
+if not matches:
+    raise SystemExit('No files matched glob pattern: ' + repr(pattern))
+for f in matches:
+    print(f)
+" "${{ inputs.glob }}")
 
-          for src in "${sources[@]}"; do
+          while IFS= read -r src; do
             name=$(basename "${src%.tjs}")
             echo ":: compiling $src  ->  bin/$name"
             "$TINYJS" -o "$BIN_OUT/$name" "$src"
@@ -106,7 +108,7 @@ jobs:
               echo ":: generating IR $src  ->  ir/$name.ll"
               "$TINYJS" -s "$src" > "$IR_OUT/$name.ll"
             fi
-          done
+          done <<< "$sources"
 
       # ── 6. Upload native binaries ─────────────────────────────────────────
       - name: Upload binaries

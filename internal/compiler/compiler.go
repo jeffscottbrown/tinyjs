@@ -82,10 +82,10 @@ func (c *Compiler) RunString(filename, input string) (string, error) {
 	return c.RunProgram(program)
 }
 
-// Build parses source, generates IR, and uses clang to create an executable at destPath.
+// Build generates an executable at destPath from the provided LLVM IR.
+// On macOS it produces a universal (fat) binary that runs on both Intel
+// and Apple Silicon, so only one macOS runner is needed in CI.
 func (c *Compiler) Build(ir string, destPath string) error {
-
-	// Create a temporary directory for the intermediate .ll file
 	tmpDir, err := os.MkdirTemp("", "tinyjs-build-*")
 	if err != nil {
 		return fmt.Errorf("temp dir: %w", err)
@@ -97,24 +97,51 @@ func (c *Compiler) Build(ir string, destPath string) error {
 		return fmt.Errorf("write IR: %w", err)
 	}
 
-	// Run clang to produce the binary at the requested destination
-	clangCmd := exec.Command("clang", clangArgs(irFile, destPath)...)
-	var clangStderr bytes.Buffer
-	clangCmd.Stderr = &clangStderr
+	if runtime.GOOS == "darwin" {
+		return buildDarwinUniversal(irFile, destPath, tmpDir)
+	}
+	return runClang([]string{"-Wno-override-module", irFile, "-o", destPath})
+}
 
-	if err := clangCmd.Run(); err != nil {
-		return fmt.Errorf("compile: %w\n%s", err, clangStderr.String())
+// buildDarwinUniversal compiles irFile for both x86_64 and arm64, then
+// merges the two slices into a universal binary at destPath using lipo.
+func buildDarwinUniversal(irFile, destPath, tmpDir string) error {
+	var sdkArgs []string
+	if out, err := exec.Command("xcrun", "--show-sdk-path").Output(); err == nil {
+		sdkArgs = []string{"-isysroot", strings.TrimSpace(string(out))}
 	}
 
+	slices := []struct {
+		target string
+		out    string
+	}{
+		{"x86_64-apple-macosx10.15", filepath.Join(tmpDir, "out_x86_64")},
+		{"arm64-apple-macosx11.0", filepath.Join(tmpDir, "out_arm64")},
+	}
+
+	for _, s := range slices {
+		args := append([]string{"-Wno-override-module", "--target=" + s.target}, sdkArgs...)
+		args = append(args, irFile, "-o", s.out)
+		if err := runClang(args); err != nil {
+			return err
+		}
+	}
+
+	var stderr bytes.Buffer
+	cmd := exec.Command("lipo", "-create", "-output", destPath, slices[0].out, slices[1].out)
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("lipo: %w\n%s", err, stderr.String())
+	}
 	return nil
 }
 
-func clangArgs(irFile, binFile string) []string {
-	args := []string{"-Wno-override-module"}
-	if runtime.GOOS == "darwin" {
-		if out, err := exec.Command("xcrun", "--show-sdk-path").Output(); err == nil {
-			args = append(args, "-isysroot", strings.TrimSpace(string(out)))
-		}
+func runClang(args []string) error {
+	var stderr bytes.Buffer
+	cmd := exec.Command("clang", args...)
+	cmd.Stderr = &stderr
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("clang: %w\n%s", err, stderr.String())
 	}
-	return append(args, irFile, "-o", binFile)
+	return nil
 }

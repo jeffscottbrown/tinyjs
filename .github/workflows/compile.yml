@@ -87,17 +87,21 @@ jobs:
           IR_OUT="$GITHUB_WORKSPACE/_out/ir"
           mkdir -p "$BIN_OUT" "$IR_OUT"
 
-          # mapfile requires bash 4+; macOS ships bash 3.2, so use a
-          # here-string + while-read loop instead.
-          sources=$(python3 -c "
-import glob, sys
-pattern = sys.argv[1]
-matches = sorted(glob.glob(pattern, recursive=True))
-if not matches:
-    raise SystemExit('No files matched glob pattern: ' + repr(pattern))
-for f in matches:
-    print(f)
-" "${{ inputs.glob }}")
+          # mapfile requires bash 4+; macOS ships bash 3.2, so capture the
+          # python output into a variable and loop with while-read instead.
+          # The heredoc indentation is stripped by YAML before the shell sees
+          # it, so python receives correctly unindented code and PYEOF lands
+          # at column 0 as the heredoc terminator requires.
+          sources=$(python3 - "${{ inputs.glob }}" <<'PYEOF'
+          import glob, sys
+          pattern = sys.argv[1]
+          matches = sorted(glob.glob(pattern, recursive=True))
+          if not matches:
+              raise SystemExit('No files matched glob pattern: ' + repr(pattern))
+          for f in matches:
+              print(f)
+          PYEOF
+          )
 
           while IFS= read -r src; do
             name=$(basename "${src%.tjs}")

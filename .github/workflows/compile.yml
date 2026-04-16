@@ -50,9 +50,17 @@ jobs:
         id: compiler
         shell: bash
         run: |
+          set -euo pipefail
           wf_ref="${{ github.workflow_ref }}"
+          echo "workflow_ref=${wf_ref}"
           repo="${wf_ref%%/.github/*}"
           ref="${wf_ref##*@}"
+          if [[ -z "$repo" || -z "$ref" ]]; then
+            echo "::error::Failed to extract repo/ref from workflow_ref='${wf_ref}'"
+            exit 1
+          fi
+          echo "repo=${repo}"
+          echo "ref=${ref}"
           echo "repo=$repo" >> "$GITHUB_OUTPUT"
           echo "ref=$ref"  >> "$GITHUB_OUTPUT"
 
@@ -75,6 +83,7 @@ jobs:
       - name: Build tinyjs
         shell: bash
         run: |
+          mkdir -p "$GITHUB_WORKSPACE/_tinyjs_bin"
           cd _tinyjs_src
           go build -o "$GITHUB_WORKSPACE/_tinyjs_bin/tinyjs" ./cmd/tinyjs
 
